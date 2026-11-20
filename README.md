@@ -9,7 +9,7 @@ credentials and without waiting for an NDA.
 - Tests: `python -m unittest discover -s tests -t .`
 
 ```
-Ran 63 tests in 0.004s
+Ran 64 tests in 0.004s
 
 OK
 ```
@@ -52,7 +52,7 @@ geo/
   runner.py       chunked / resumable batch runner, per-platform isolation
   collectors.py   API channel + incognito browser channel skeletons
   compliance.py   fact-source gate (no source -> no text)
-tests/            63 unittest cases, zero network, zero credentials
+tests/            64 unittest cases, zero network, zero credentials
 ```
 
 ## What this artifact deliberately does NOT do

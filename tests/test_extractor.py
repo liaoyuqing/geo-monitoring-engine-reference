@@ -61,6 +61,16 @@ class TestMultiBrandSentiment(unittest.TestCase):
         self.assertNotIn("一般", rows["蓝湾白酒"].sentiment_evidence)
         self.assertNotIn("推荐", rows["竞品甲"].sentiment_evidence)
 
+    def test_buyer_cited_sample_from_test_url_belongs_to_nearest_brand(self):
+        # The buyer quoted tests/test_extractor.py lines 31-32 as the sample where
+        # 蓝湾白酒 got 消极 because of 竞品甲's 一般. That exact string is now
+        # asserted for sentiment, not only for URL attribution.
+        raw = ("蓝湾白酒值得推荐，详见 https://example.com/lanwan 。"
+               "竞品甲一般，详见 https://example.com/jingpin 。")
+        rows = {m.brand: m for m in extract(raw, ALIASES)}
+        self.assertEqual(rows["蓝湾白酒"].sentiment, "积极")
+        self.assertEqual(rows["竞品甲"].sentiment, "消极")
+
 
 class TestUrlAttribution(unittest.TestCase):
     def test_url_belongs_to_nearest_brand(self):
