@@ -9,7 +9,7 @@ credentials and without waiting for an NDA.
 - Tests: `python -m unittest discover -s tests -t .`
 
 ```
-Ran 42 tests in 0.001s
+Ran 63 tests in 0.004s
 
 OK
 ```
@@ -31,19 +31,28 @@ a test that runs offline in milliseconds.
 | "same as above" rows for Kimi/Tongyi/Wenxin; API has no screenshot; fingerprint was not an account identity | `geo/collectors.py`, `geo/evidence.py` | `TestBrowserChannel`, `TestEvidence` |
 | browser-only platform cannot meet 100 prompts / 30 min | `geo/runner.py` | `test_browser_only_platform_breaches_30min_at_low_rate` |
 | 6 people vs 7 roles; V3.0 arithmetic | §4 of the resubmitted proposal | table recomputed below |
+### Round-2 objections (second rework request) - fixed in code, not in prose
+
+| Buyer objection | Fix in code | Proof (all names are real; run the suite) |
+|---|---|---|
+| multi-brand sentiment: a competitor negative word was scored onto the earlier brand | the polarity window is now the mention own **clause**, clipped at neighbour brand spans, widened by one clause only when the clause holds no polarity word | `TestMultiBrandSentiment.test_later_competitor_negative_does_not_leak_left`, `test_earlier_brand_negative_does_not_leak_right`, `test_reversed_order_gives_the_same_pair`, `test_verdict_in_following_clause_still_reaches_the_subject` |
+| API channel cannot produce a screenshot, so what is the artefact? | two mandatory surrogates: `response_body_sha256` (re-hashable) + `response_request_id` (vendor-confirmable); a row without them is rejected | `test_api_row_without_body_hash_is_rejected`, `test_api_row_without_request_id_is_rejected`, `test_body_hash_is_deterministic_and_distinguishes_bodies` |
+| browser channel accepted `model_version="unknown"`; API silently fell back to the client-declared model | both channels reject unknown or client-declared model versions; the web product reads its version from an explicit page probe | `test_unknown_model_version_is_rejected`, `test_client_declared_model_version_is_rejected`, `test_missing_server_model_is_not_backfilled_with_the_declared_one`, `test_browser_row_without_model_version_fails` |
+| §2.3 claims ICC / design effect, but neither was implemented | `icc_1`, `design_effect`, `clustered_se_pct` implemented and tested; clustering can only widen the interval | `TestClusteredVariance.test_design_effect_formula`, `test_clustered_se_is_never_smaller_than_plain_se`, `test_icc_of_disjoint_groups_is_one`, `test_icc_requires_balanced_groups` |
+| binary `mention_rate` makes "5% variance" mean "3 of 3 identical" | stated in the `geo/stats.py` docstring and surfaced by `is_binary_metric`, so the report labels those Prompts instead of quoting a meaningless 5% | `test_binary_metric_band_means_all_repeats_must_agree` |
 
 ## Layout
 
 ```
 geo/
-  extractor.py    deterministic brand/position/sentiment/URL extraction
-  evidence.py     five-field evidence envelope, fail-closed validation
+  extractor.py    brand/position/sentiment/URL extraction, clause-scoped polarity
+  evidence.py     five-field envelope + API surrogates, fail-closed validation
   timeout.py      total-deadline budget that makes the 60 s ceiling provable
-  stats.py        repeatability (CV) vs sampling error (SE), kept apart
+  stats.py        repeatability (CV) vs sampling error (SE vs clustered SE) + ICC
   runner.py       chunked / resumable batch runner, per-platform isolation
   collectors.py   API channel + incognito browser channel skeletons
   compliance.py   fact-source gate (no source -> no text)
-tests/            42 unittest cases, zero network, zero credentials
+tests/            63 unittest cases, zero network, zero credentials
 ```
 
 ## What this artifact deliberately does NOT do
@@ -70,6 +79,15 @@ python -m unittest discover -s tests -t . -v
 - Yuanbao at 3 requests/min with a 1-account pool needs 33.3 min for 100
   prompts, which breaches the 30 min ceiling; the code returns that platform in
   a `_breach` list instead of hiding it. A 4-account pool brings it to 8.3 min.
+- Design effect with 3 repeats per Prompt: `deff = 1 + (3-1) * ICC`. At ICC 0.5
+  the effective sample size of 300 clustered samples is 150, so the aggregate
+  95 percent half-width goes from 2.89 pp to 4.08 pp. Clustering can only widen
+  it: `clustered_se_pct(0.5, 100, 3, 0.0) == sampling_se_pct(0.5, 300)`.
+- Multi-brand polarity is clause-scoped. Run the suite and look at
+  `TestMultiBrandSentiment`: for the answer "蓝湾白酒值得推荐，竞品甲一般。" the first
+  brand is 积极 and the second is 消极. The pre-fix code returned 消极 for both,
+  because the negative word list was scanned first over a 100-char window that
+  crossed the other brand - that is exactly the bug the buyer found.
 
 ## Licence / data
 

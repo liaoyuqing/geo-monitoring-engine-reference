@@ -2,7 +2,17 @@ import unittest
 
 from geo.compliance import Claim, ComplianceError, check_claims
 from geo.runner import PlatformPolicy, Task, degraded_plan, platform_budget_minutes, run_batch
-from geo.stats import cohen_kappa, mention_rate, repeated_measurement_cv, sampling_se_pct, within_band
+from geo.stats import (
+    clustered_se_pct,
+    cohen_kappa,
+    design_effect,
+    icc_1,
+    is_binary_metric,
+    mention_rate,
+    repeated_measurement_cv,
+    sampling_se_pct,
+    within_band,
+)
 
 
 class TestStats(unittest.TestCase):
@@ -24,6 +34,52 @@ class TestStats(unittest.TestCase):
     def test_cohen_kappa_bounds(self):
         self.assertAlmostEqual(cohen_kappa(["a", "b", "a"], ["a", "b", "a"]), 1.0)
         self.assertLess(cohen_kappa(["a", "a", "b", "b"], ["b", "b", "a", "a"]), 0.0)
+
+
+class TestClusteredVariance(unittest.TestCase):
+    """Round-2 minor 4: the proposal promises ICC and deff, so they must exist.
+
+    Before this fix both were described in prose and implemented nowhere; the
+    buyer checked the module and was right.
+    """
+
+    def test_icc_of_disjoint_groups_is_one(self):
+        self.assertAlmostEqual(icc_1([[1.0, 1.0, 1.0], [0.0, 0.0, 0.0]]), 1.0, places=6)
+
+    def test_icc_of_correlated_repeats_is_between_zero_and_one(self):
+        v = icc_1([[0.40, 0.42, 0.41], [0.60, 0.58, 0.61]])
+        self.assertGreater(v, 0.5)
+        self.assertLess(v, 1.0)
+
+    def test_icc_requires_balanced_groups(self):
+        with self.assertRaises(ValueError):
+            icc_1([[1.0, 1.0], [0.0, 0.0, 0.0]])
+
+    def test_icc_requires_at_least_two_groups(self):
+        with self.assertRaises(ValueError):
+            icc_1([[1.0, 1.0, 1.0]])
+
+    def test_design_effect_formula(self):
+        self.assertAlmostEqual(design_effect(3, 0.5), 2.0)
+        self.assertAlmostEqual(design_effect(1, 0.5), 1.0)   # no clustering
+        self.assertAlmostEqual(design_effect(3, 1.0), 3.0)   # perfectly clustered
+
+    def test_clustered_se_is_never_smaller_than_plain_se(self):
+        plain = sampling_se_pct(0.5, 300)
+        clustered = clustered_se_pct(0.5, 100, 3, 0.5)
+        self.assertGreater(clustered, plain)
+        self.assertAlmostEqual(clustered, 4.08, places=1)
+
+    def test_clustered_se_with_zero_icc_equals_plain_se(self):
+        self.assertAlmostEqual(clustered_se_pct(0.5, 100, 3, 0.0),
+                               sampling_se_pct(0.5, 300), places=6)
+
+    def test_binary_metric_band_means_all_repeats_must_agree(self):
+        # (max-min)/mean <= 5% over 0/1 values can only hold when all are equal.
+        self.assertTrue(within_band([1.0, 1.0, 1.0], 0.05))
+        self.assertFalse(within_band([1.0, 1.0, 0.0], 0.05))
+        self.assertTrue(is_binary_metric([1.0, 0.0, 1.0]))
+        self.assertFalse(is_binary_metric([0.4, 0.42, 0.41]))
 
 
 class TestRunner(unittest.TestCase):

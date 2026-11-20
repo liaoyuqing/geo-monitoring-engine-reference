@@ -1,7 +1,9 @@
 import unittest
 
-from geo.evidence import Evidence, EvidenceError, account_fingerprint
+from geo.evidence import Evidence, EvidenceError, account_fingerprint, body_sha256
 from geo.timeout import Budget, simulate
+
+BODY_SHA = "b" * 64
 
 
 class TestEvidence(unittest.TestCase):
@@ -10,7 +12,9 @@ class TestEvidence(unittest.TestCase):
                     collected_at="2026-11-20T09:30:00+08:00",
                     model_version="svc-2026-11-01",
                     account_fingerprint_hash=account_fingerprint("key-A"),
-                    channel="api", screenshot_kind="none_api_channel")
+                    channel="api", screenshot_kind="none_api_channel",
+                    response_body_sha256=BODY_SHA,
+                    response_request_id="req-1")
         base.update(kw)
         return Evidence(**base)
 
@@ -22,6 +26,29 @@ class TestEvidence(unittest.TestCase):
     def test_api_row_cannot_fabricate_screenshot(self):
         with self.assertRaises(EvidenceError):
             self._api_row(screenshot_sha256="deadbeef").validate()
+
+    def test_api_row_without_body_hash_is_rejected(self):
+        # round-2 minor 3: API channel has no screenshot, so the response body
+        # hash is the artefact that replaces it. Missing hash = inadmissible.
+        with self.assertRaises(EvidenceError):
+            self._api_row(response_body_sha256=None).validate()
+
+    def test_api_row_without_request_id_is_rejected(self):
+        with self.assertRaises(EvidenceError):
+            self._api_row(response_request_id=None).validate()
+
+    def test_body_hash_is_deterministic_and_distinguishes_bodies(self):
+        self.assertEqual(body_sha256("{}"), body_sha256(b"{}"))
+        self.assertNotEqual(body_sha256("{\"a\":1}"), body_sha256("{\"a\":2}"))
+        self.assertEqual(len(body_sha256("{}")), 64)
+
+    def test_unknown_model_version_is_rejected(self):
+        with self.assertRaises(EvidenceError):
+            self._api_row(model_version="unknown").validate()
+
+    def test_client_declared_model_version_is_rejected(self):
+        with self.assertRaises(EvidenceError):
+            self._api_row(model_version_source="client").validate()
 
     def test_browser_row_requires_screenshot(self):
         with self.assertRaises(EvidenceError):

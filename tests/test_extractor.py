@@ -26,6 +26,42 @@ class TestSentiment(unittest.TestCase):
         self.assertEqual(rows[0].sentiment, "中性")
 
 
+class TestMultiBrandSentiment(unittest.TestCase):
+    """Round-2 blocker 1: a competitor's polarity must not leak across brands.
+
+    Before the fix the window was pos-40..pos+60 and the negative word list was
+    scanned first, so any negative word anywhere in that 100-char slice won -
+    including a word that clearly belonged to the next brand.
+    """
+
+    def test_later_competitor_negative_does_not_leak_left(self):
+        rows = {m.brand: m for m in extract("蓝湾白酒值得推荐，竞品甲一般。", ALIASES)}
+        self.assertEqual(rows["蓝湾白酒"].sentiment, "积极")
+        self.assertEqual(rows["竞品甲"].sentiment, "消极")
+
+    def test_earlier_brand_negative_does_not_leak_right(self):
+        rows = {m.brand: m for m in extract("蓝湾白酒不推荐，竞品甲很优秀。", ALIASES)}
+        self.assertEqual(rows["蓝湾白酒"].sentiment, "消极")
+        self.assertEqual(rows["竞品甲"].sentiment, "积极")
+
+    def test_reversed_order_gives_the_same_pair(self):
+        rows = {m.brand: m for m in extract("竞品甲一般，蓝湾白酒值得推荐。", ALIASES)}
+        self.assertEqual(rows["竞品甲"].sentiment, "消极")
+        self.assertEqual(rows["蓝湾白酒"].sentiment, "积极")
+
+    def test_verdict_in_following_clause_still_reaches_the_subject(self):
+        # the brand sits alone in its clause; the verdict lands in the next one.
+        # A pure clause clip would return 中性, so the one-clause widening must work.
+        rows = {m.brand: m for m in extract("蓝湾白酒。它的口感出色。竞品甲一般。", ALIASES)}
+        self.assertEqual(rows["蓝湾白酒"].sentiment, "积极")
+        self.assertEqual(rows["竞品甲"].sentiment, "消极")
+
+    def test_evidence_never_contains_the_other_brands_verdict(self):
+        rows = {m.brand: m for m in extract("蓝湾白酒值得推荐，竞品甲一般。", ALIASES)}
+        self.assertNotIn("一般", rows["蓝湾白酒"].sentiment_evidence)
+        self.assertNotIn("推荐", rows["竞品甲"].sentiment_evidence)
+
+
 class TestUrlAttribution(unittest.TestCase):
     def test_url_belongs_to_nearest_brand(self):
         raw = ("蓝湾白酒值得推荐，详见 https://example.com/lanwan 。"

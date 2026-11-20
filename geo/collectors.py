@@ -4,13 +4,28 @@ Both are deliberately transport-injected: this module builds the request and
 normalises the response, but performs no I/O unless a caller passes a live
 transport. That keeps the skeleton auditable (and unit-testable) without any
 credentials, and makes it obvious where de-personalisation happens.
+
+Provenance rules enforced here (round-2 fixes)
+---------------------------------------------
+* model_version is taken from the SERVER response only. The client-declared
+  model name is never used as a fallback: if the server does not report it the
+  row is rejected (round-1 bug: `resp.model or self.model` silently claimed a
+  model that may not have answered).
+* The raw response body is hashed BEFORE parsing (response_body_sha256) so the
+  stored raw_answer can be re-hashed by a reviewer - the API-channel stand-in
+  for a screenshot.
+* The browser channel cannot obtain a server-reported model version for a web
+  product, so it reads it from an explicit page-level probe and marks the
+  source; if the probe returns nothing the row is rejected instead of storing
+  the string "unknown".
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+import json
+from dataclasses import dataclass
+from typing import Any, Protocol
 
-from .evidence import Evidence, account_fingerprint, prompt_hash
+from .evidence import Evidence, account_fingerprint, body_sha256, prompt_hash
 
 
 class Transport(Protocol):
@@ -38,19 +53,32 @@ class ApiChannel:
             payload["seed"] = self.seed
         return {"url": self.base_url.rstrip("/") + "/chat/completions", "payload": payload}
 
-    def normalise(self, resp: dict, prompt_text: str, collected_at: str) -> Evidence:
+    def normalise(self, resp: dict, prompt_text: str, collected_at: str,
+                  raw_body: str | bytes | None = None) -> Evidence:
+        """Build an evidence row from a parsed response.
+
+        `raw_body` is the exact bytes/text the server returned; it is hashed to
+        give the API channel its screenshot surrogate. When a caller has only
+        the parsed dict (unit tests, replays) the canonical JSON of that dict is
+        hashed, and the caller is responsible for saying so in `extra`.
+        """
+        body = raw_body if raw_body is not None else json.dumps(resp, sort_keys=True)
         choice = (resp.get("choices") or [{}])[0]
         raw = (choice.get("message") or {}).get("content") or ""
+        server_model = resp.get("model")
         return Evidence(
             raw_answer=raw,
             collected_at=collected_at,
-            model_version=str(resp.get("model") or self.model),   # server-reported
+            model_version=str(server_model) if server_model else "",   # server-only
+            model_version_source="server",
             account_fingerprint_hash=account_fingerprint(self.key_id),
             channel="api",
             screenshot_sha256=None,
             screenshot_kind="none_api_channel",
             prompt_hash=prompt_hash(prompt_text),
+            response_body_sha256=body_sha256(body),
             response_request_id=resp.get("id"),
+            extra={"declared_model": self.model, "body_is_canonical_json": raw_body is None},
         )
 
 
@@ -63,6 +91,9 @@ class BrowserChannel:
     a fresh incognito context per collection, pinned UA/viewport/locale, no
     persisted storage, and an exit-IP bound to the account. These are the only
     levers that survive a server-side change, so they are named explicitly.
+
+    Model version for a web product is read from the page itself
+    (`model_version_probe`), never assumed; `unknown` is not admissible.
     """
     name: str
     url: str
@@ -88,13 +119,15 @@ class BrowserChannel:
         return Evidence(
             raw_answer=page_result.get("answer_text", ""),
             collected_at=collected_at,
-            model_version=str(page_result.get("model_version") or "unknown"),
+            model_version=str(page_result.get("model_version") or ""),   # page-reported only
+            model_version_source="server",
             account_fingerprint_hash=account_fingerprint(self.account_ref),
             channel="browser",
             screenshot_sha256=page_result.get("screenshot_sha256"),
             screenshot_kind="full_page",
             screenshot_path=page_result.get("screenshot_path"),
             prompt_hash=prompt_hash(prompt_text),
+            extra={"model_version_probe": page_result.get("model_version_probe")},
         )
 
 
